@@ -167,8 +167,10 @@ router.post("/", async (req, res) => {
     };
 
     await container.items.create(masterExpense);
+    console.log(`📥 POST /master-expense saved id=${masterExpense.id} from=${SubmitterEmail} approver=${ApproverEmail}`);
 
     // Fire "expense.submitted" → manager. Non-blocking; obeys NOTIFY_ENABLED.
+    console.log(`✉ scheduling expense.submitted → ${masterExpense.ApproverEmail}`);
     setImmediate(() =>
       safeNotify("expense.submitted", {
         expense: masterExpense,
@@ -491,10 +493,16 @@ router.put("/:id", async (req, res) => {
     resource.ApprovalHistory.push(newEntry);
 
     await container.item(id, id).replace(resource);
+    console.log(`🔁 PUT /master-expense/${id} status ${oldStatus} → ${ApprovalStatus} by=${UpdatedBy || resource.ApproverEmail}`);
 
     // Notify on Approved / Rejected / Resubmitted-back-to-Pending
     const ev = pickEventForStatusChange(oldStatus, ApprovalStatus, resource);
-    if (ev) setImmediate(() => safeNotify(ev.type, ev.ctx));
+    if (ev) {
+      console.log(`✉ scheduling ${ev.type} → ${ev.ctx?.recipient}`);
+      setImmediate(() => safeNotify(ev.type, ev.ctx));
+    } else {
+      console.log(`✉ no notification event for transition ${oldStatus} → ${ApprovalStatus}`);
+    }
 
     return res.json(resource);
   } catch (error) {
@@ -604,10 +612,16 @@ router.put("/by-id/:id", async (req, res) => {
 
     // Save the updated document back
     const { resource } = await container.items.upsert(doc);
+    console.log(`🔁 PUT /master-expense/by-id/${id} status ${oldStatus} → ${ApprovalStatus} by=${UpdatedBy || resource.ApproverEmail}`);
 
     // Notify on Approved / Rejected / Resubmitted-back-to-Pending
     const ev = pickEventForStatusChange(oldStatus, ApprovalStatus, resource);
-    if (ev) setImmediate(() => safeNotify(ev.type, ev.ctx));
+    if (ev) {
+      console.log(`✉ scheduling ${ev.type} → ${ev.ctx?.recipient}`);
+      setImmediate(() => safeNotify(ev.type, ev.ctx));
+    } else {
+      console.log(`✉ no notification event for transition ${oldStatus} → ${ApprovalStatus}`);
+    }
 
     return res.json(resource);
   } catch (err) {

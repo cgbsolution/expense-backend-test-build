@@ -5,6 +5,16 @@
 
 const { render } = require("./render");
 
+// One-time diagnostic line at module load — visible in Azure Log stream so we
+// can confirm the deployed code can read the env vars.
+console.log(
+  `📧 notifier loaded | provider=${process.env.NOTIFY_PROVIDER || "(unset)"} ` +
+  `enabled=${process.env.NOTIFY_ENABLED || "(unset)"} ` +
+  `smtp_host=${process.env.SMTP_HOST || "(unset)"} ` +
+  `smtp_user=${process.env.SMTP_USER || "(unset)"} ` +
+  `smtp_from=${process.env.SMTP_FROM || "(unset)"}`
+);
+
 // Pick provider from env. Default = graph (existing M365 wiring).
 //   NOTIFY_PROVIDER=graph  → notifier/provider/graph.js
 //   NOTIFY_PROVIDER=smtp   → notifier/provider/smtp.js
@@ -65,9 +75,15 @@ async function notify(eventType, ctx) {
 // - Logs and swallows errors; the API response must never wait on or fail
 //   because of email delivery.
 async function safeNotify(eventType, ctx) {
-  if (process.env.NOTIFY_ENABLED !== "true") return;
+  // Log entry unconditionally — proves the route is calling us.
+  console.log(`📧 safeNotify(${eventType}) called | recipient=${ctx?.recipient || "(none)"} | enabled=${process.env.NOTIFY_ENABLED}`);
+
+  if (process.env.NOTIFY_ENABLED !== "true") {
+    console.log(`📧 safeNotify(${eventType}) skipped: NOTIFY_ENABLED is "${process.env.NOTIFY_ENABLED}", expected literal "true"`);
+    return;
+  }
   if (!ctx || !ctx.recipient) {
-    console.warn(`safeNotify: skipped ${eventType} (no recipient)`);
+    console.warn(`📧 safeNotify(${eventType}) skipped: no recipient`);
     return;
   }
   try {
@@ -75,6 +91,7 @@ async function safeNotify(eventType, ctx) {
     console.log(`📧 sent ${eventType} → ${ctx.recipient}`, result.providerMessageId || "");
   } catch (err) {
     console.error(`📧 ${eventType} failed:`, err.message);
+    if (err.stack) console.error(err.stack);
   }
 }
 
