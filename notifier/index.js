@@ -32,7 +32,63 @@ const EMPLOYEE_INFO_URL =
   process.env.EMPLOYEE_INFO_URL ||
   "https://ocr-validations-hnh3e7g2bkhhf6hq.southeastasia-01.azurewebsites.net/employee-info";
 
+// Some expense docs (especially those written by the chatbot's expenseagent-dev
+// backend) don't carry a top-level TotalAmount. Compute it from the line items
+// so the templates always have a number to print.
+function ensureTotalAmount(expense) {
+  if (!expense) return;
+  if (expense.TotalAmount !== undefined && expense.TotalAmount !== null && expense.TotalAmount !== "") {
+    // Already set — just normalize formatting (Indian-locale, 2 decimals).
+    const n = Number(expense.TotalAmount);
+    if (!Number.isNaN(n)) {
+      expense.TotalAmount = n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    return;
+  }
+
+  const items = Array.isArray(expense.ExpenseData) ? expense.ExpenseData : [];
+  let total = 0;
+  for (const item of items) {
+    const inv = Number(item?.InvoiceAmount);
+    const claim = Number(item?.ItemData?.ClaimAmount);
+    if (!Number.isNaN(inv) && inv > 0) total += inv;
+    else if (!Number.isNaN(claim) && claim > 0) total += claim;
+  }
+  expense.TotalAmount = total > 0
+    ? total.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : "0.00";
+}
+
+// Convert ISO timestamps to a friendly "DD-MM-YYYY HH:MM" form.
+// Mutates fields in place; safe because the route handler has already returned
+// before safeNotify runs (setImmediate fires after res.json).
+function formatNiceDate(value) {
+  if (!value) return value;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const HH = String(d.getHours()).padStart(2, "0");
+  const MM = String(d.getMinutes()).padStart(2, "0");
+  return `${dd}-${mm}-${yyyy} ${HH}:${MM}`;
+}
+
+function formatExpenseDates(expense) {
+  if (!expense) return;
+  if (expense.SubmissionDate) expense.SubmissionDate = formatNiceDate(expense.SubmissionDate);
+  if (expense.ApprovedAt) expense.ApprovedAt = formatNiceDate(expense.ApprovedAt);
+  if (expense.LastActionAt) expense.LastActionAt = formatNiceDate(expense.LastActionAt);
+  if (expense.RejectionInfo && expense.RejectionInfo.RejectedAt) {
+    expense.RejectionInfo.RejectedAt = formatNiceDate(expense.RejectionInfo.RejectedAt);
+  }
+}
+
 async function enrichCtx(ctx) {
+  // Always normalize amount + date formatting, even on second call.
+  ensureTotalAmount(ctx.expense);
+  formatExpenseDates(ctx.expense);
+
   if (ctx.employee) return ctx;
 
   const submitterEmail = ctx.expense?.SubmitterEmail || ctx.expense?.submitterEmail || "";
