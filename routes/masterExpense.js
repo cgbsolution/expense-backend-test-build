@@ -742,4 +742,92 @@ router.post("/get-sas-url", async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /master-expense/notify:
+ *   post:
+ *     summary: Lightweight notification trigger (no Cosmos write)
+ *     description: |
+ *       Used by chatbot frontend after expenseagent-dev has already saved the expense.
+ *       Resolves the recipient automatically when omitted: manager-lookup for
+ *       `expense.submitted`/`expense.resubmitted`, submitter for `expense.approved`/`expense.rejected`.
+ *     tags: [MasterExpense]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - eventType
+ *               - expense
+ *             properties:
+ *               eventType:
+ *                 type: string
+ *                 enum: [expense.submitted, expense.resubmitted, expense.approved, expense.rejected]
+ *               expense:
+ *                 type: object
+ *               recipient:
+ *                 type: string
+ *                 description: Optional. Auto-resolved if omitted.
+ *     responses:
+ *       200: { description: Notification accepted }
+ *       400: { description: Missing fields or no recipient resolvable }
+ */
+const EMPLOYEE_INFO_URL =
+  process.env.EMPLOYEE_INFO_URL ||
+  "https://ocr-validations-hnh3e7g2bkhhf6hq.southeastasia-01.azurewebsites.net/employee-info";
+
+async function lookupManagerEmail(submitterEmail) {
+  if (!submitterEmail) return "";
+  try {
+    const url = `${EMPLOYEE_INFO_URL}?emp_email=${encodeURIComponent(submitterEmail)}`;
+    const resp = await fetch(url);
+    if (!resp.ok) return "";
+    const info = await resp.json();
+    return info?.ManagerEmail || "";
+  } catch (e) {
+    console.warn("lookupManagerEmail failed:", e.message);
+    return "";
+  }
+}
+
+router.post("/notify", async (req, res) => {
+  try {
+    const { eventType, expense, recipient } = req.body || {};
+    if (!eventType || !expense) {
+      return res.status(400).json({ error: "eventType and expense are required" });
+    }
+    console.log(`📬 POST /master-expense/notify event=${eventType} explicitRecipient=${recipient || "(none)"}`);
+
+    let to = recipient || "";
+    if (!to) {
+      if (eventType === "expense.submitted" || eventType === "expense.resubmitted") {
+        to = await lookupManagerEmail(expense.SubmitterEmail);
+      } else if (eventType === "expense.approved" || eventType === "expense.rejected") {
+        to = expense.SubmitterEmail || "";
+      }
+    }
+
+    if (!to) {
+      return res.status(400).json({ error: "Could not resolve recipient. Pass `recipient` explicitly or ensure SubmitterEmail is set." });
+    }
+
+    // Make sure the templates have what they need
+    const expenseForTemplate = {
+      ...expense,
+      ApproverEmail: expense.ApproverEmail || (eventType.startsWith("expense.submitted") || eventType === "expense.resubmitted" ? to : expense.ApproverEmail),
+    };
+
+    setImmediate(() =>
+      safeNotify(eventType, { expense: expenseForTemplate, recipient: to })
+    );
+
+    return res.status(200).json({ accepted: true, recipient: to });
+  } catch (err) {
+    console.error("Error in /notify:", err);
+    return res.status(500).json({ error: "Failed to enqueue notification" });
+  }
+});
+
 module.exports = router;
