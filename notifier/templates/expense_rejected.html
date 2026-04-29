@@ -13,7 +13,7 @@
       </tr>
       <tr>
         <td style="padding:24px;">
-          <p style="margin:0 0 14px 0;">Hi <strong>{{employee.FullName}}</strong>,</p>
+          <p style="margin:0 0 14px 0;">Dear <strong>{{employee.FullName}}</strong>,</p>
           <p style="margin:0 0 14px 0;">
             Your expense has been <strong style="color:#dc2626;">rejected</strong> by your manager.
           </p>
@@ -32,6 +32,8 @@
           <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:12px 14px;margin:18px 0;">
             <div style="font-weight:600;color:#991b1b;margin-bottom:6px;">Reason</div>
             <div style="color:#7f1d1d;">{{reason}}</div>
+            <div style="font-weight:600;color:#991b1b;margin-top:12px;margin-bottom:6px;">Comments</div>
+            <div style="color:#7f1d1d;white-space:pre-wrap;">{{comments}}</div>
           </div>
 
           <p style="margin:0 0 14px 0;color:#374151;">

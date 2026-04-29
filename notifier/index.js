@@ -84,32 +84,57 @@ function formatExpenseDates(expense) {
   }
 }
 
+// Fall back to ApprovalHistory[0].at when chatbot doesn't set SubmissionDate.
+function ensureSubmissionDate(expense) {
+  if (!expense) return;
+  if (expense.SubmissionDate) return;
+  const first = Array.isArray(expense.ApprovalHistory) ? expense.ApprovalHistory[0] : null;
+  if (first?.at) expense.SubmissionDate = first.at;
+}
+
+async function fetchEmployeeInfo(email) {
+  if (!email) return {};
+  try {
+    const url = `${EMPLOYEE_INFO_URL}?emp_email=${encodeURIComponent(email)}`;
+    const resp = await fetch(url);
+    if (resp.ok) return await resp.json();
+  } catch (err) {
+    console.warn(`employee-info fetch failed for ${email}:`, err.message);
+  }
+  return {};
+}
+
+function fallbackName(email) {
+  return email ? email.split("@")[0] : "";
+}
+
 async function enrichCtx(ctx) {
-  // Always normalize amount + date formatting, even on second call.
+  // Always normalize, even on second call.
   ensureTotalAmount(ctx.expense);
+  ensureSubmissionDate(ctx.expense);
   formatExpenseDates(ctx.expense);
 
-  if (ctx.employee) return ctx;
-
-  const submitterEmail = ctx.expense?.SubmitterEmail || ctx.expense?.submitterEmail || "";
-  let employee = {};
-
-  if (submitterEmail) {
-    try {
-      const url = `${EMPLOYEE_INFO_URL}?emp_email=${encodeURIComponent(submitterEmail)}`;
-      const resp = await fetch(url);
-      if (resp.ok) employee = await resp.json();
-    } catch (err) {
-      console.warn("enrichCtx: employee-info fetch failed:", err.message);
-    }
+  // ---- Submitter (employee) lookup ----
+  if (!ctx.employee) {
+    const submitterEmail = ctx.expense?.SubmitterEmail || ctx.expense?.submitterEmail || "";
+    const employee = await fetchEmployeeInfo(submitterEmail);
+    if (!employee.FullName) employee.FullName = fallbackName(submitterEmail) || "Submitter";
+    ctx.employee = employee;
   }
 
-  // Fallback display name when API doesn't have one — use the part before "@".
-  if (!employee.FullName) {
-    employee.FullName = submitterEmail ? submitterEmail.split("@")[0] : "Submitter";
+  // ---- Approver lookup ----
+  // For submission-style events the recipient IS the approver, so we can use it.
+  // For approved/rejected the approver is on the expense doc.
+  if (!ctx.approver) {
+    const approverEmail =
+      ctx.expense?.ApproverEmail ||
+      (/(submitted|resubmitted)$/.test(ctx._eventType || "") ? ctx.recipient : "") ||
+      "";
+    const approver = await fetchEmployeeInfo(approverEmail);
+    if (!approver.FullName) approver.FullName = fallbackName(approverEmail) || "Manager";
+    ctx.approver = approver;
   }
 
-  ctx.employee = employee;
   return ctx;
 }
 
@@ -118,6 +143,7 @@ async function notify(eventType, ctx) {
     throw new Error("notify() requires ctx.recipient");
   }
 
+  ctx._eventType = eventType; // used by enrichCtx for approver fallback
   await enrichCtx(ctx);
 
   const { subject, html } = render(eventType, ctx);
@@ -162,12 +188,19 @@ function pickEventForStatusChange(oldStatus, newStatus, resource) {
     };
   }
   if (newStatus === "Rejected" && oldStatus !== "Rejected") {
+    const reason = resource.RejectionInfo?.Reason || "";
+    const rawComments = resource.RejectionInfo?.Comments || "";
+    // Hide the auto-generated "Rejected by <email>. <reason>" string when the
+    // user didn't actually type anything in the rejection modal.
+    const isBoilerplate = /^Rejected by\s+\S+\.\s/.test(rawComments);
+    const comments = isBoilerplate || !rawComments ? "—" : rawComments;
     return {
       type: "expense.rejected",
       ctx: {
         expense: resource,
         recipient: resource.SubmitterEmail,
-        reason: resource.RejectionInfo?.Reason || "",
+        reason,
+        comments,
       },
     };
   }

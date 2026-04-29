@@ -113,7 +113,10 @@ async function pollOnce() {
 
         const ctx = { expense: doc, recipient: ev.recipient };
         if (ev.eventType === "expense.rejected") {
+          const rawComments = doc.RejectionInfo?.Comments || "";
+          const isBoilerplate = /^Rejected by\s+\S+\.\s/.test(rawComments);
           ctx.reason = doc.RejectionInfo?.Reason || "";
+          ctx.comments = isBoilerplate || !rawComments ? "—" : rawComments;
         }
 
         console.log(`🔔 change feed → ${ev.eventType} for doc ${doc.id} → ${ev.recipient}`);
